@@ -86,6 +86,59 @@ class DropboxGuzzleHttpClient implements DropboxHttpClientInterface
     }
 
     /**
+     * Send multiple requests to the server in parallel and fetch the raw response.
+     *
+     * @param  array $requests     An array of requests to send.
+     *
+     * @return \Kunnu\Dropbox\Http\DropboxRawResponse Raw response from the server
+     *
+     * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
+     */
+    public function send_multiple(&$requests)
+    {
+    	$requestArray = [];
+		foreach($requests as $id=>$request)
+		{
+			$options = [];
+			if (array_key_exists('options', $request))
+				$options = $request['options'];
+
+			$options['body'] = $request['body'];
+
+			if (array_key_exists('headers', $request))
+				$options['headers'] = $request['headers'];
+			else
+				$options['headers'] = [];
+
+			$requestArray[$id] = $this->client->requestAsync($request['method'], $request['url'], $options);
+		}
+
+		try
+		{
+			$results = \GuzzleHttp\Promise\unwrap($requestArray);
+
+			foreach ($results as $id=>$rawResponse)
+			{
+				$httpStatusCode = $rawResponse->getStatusCode();
+
+				//Something went wrong
+				if ($httpStatusCode >= 400)
+					throw new DropboxClientException($rawResponse->getBody());
+
+				$body = $rawResponse->getBody();
+				$rawHeaders = $rawResponse->getHeaders();
+
+				//Create and return a DropboxRawResponse object
+				$requests[$id]['response'] = new DropboxRawResponse($rawHeaders, $body, $httpStatusCode);
+			}
+		}
+		catch (Exception $e)
+		{
+			throw new DropboxClientException($e->getMessage(), $e->getCode());
+		}
+    }
+
+    /**
      * Get the Response Body.
      *
      * @param string|\Psr\Http\Message\ResponseInterface $response Response object

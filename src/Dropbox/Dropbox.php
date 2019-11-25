@@ -250,12 +250,13 @@ class Dropbox
      * @param  array       $params       Request Query Params
      * @param  string      $accessToken  Access Token to send with the Request
      * @param  DropboxFile $responseFile Save response to the file
+	 * @param  boolean            $async       If true, a request is returned (to be sent later in bulk)
      *
      * @return \Kunnu\Dropbox\DropboxResponse
      *
      * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
      */
-    public function sendRequest($method, $endpoint, $endpointType = 'api', array $params = [], $accessToken = null, DropboxFile $responseFile = null)
+    public function sendRequest($method, $endpoint, $endpointType = 'api', array $params = [], $accessToken = null, DropboxFile $responseFile = null, $async = false)
     {
         //Access Token
         $accessToken = $this->getAccessToken() ? $this->getAccessToken() : $accessToken;
@@ -263,12 +264,29 @@ class Dropbox
         //Make a DropboxRequest object
         $request = new DropboxRequest($method, $endpoint, $accessToken, $endpointType, $params);
 
+        if ($async)
+        	return $request;
+
         //Make a DropboxResponse object if a response should be saved to the file
         $response = $responseFile ? new DropboxResponseToFile($request, $responseFile) : null;
 
         //Send Request through the DropboxClient
         //Fetch and return the Response
         return $this->getClient()->sendRequest($request, $response);
+    }
+
+    /**
+     * Make multiple requests to the API at once
+     *
+     * @param  array      $requests       The requests to send
+     *
+     * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
+     */
+    public function sendRequests(&$requests)
+    {
+        //Send Request through the DropboxClient
+        //Fetch and return the Response
+        $this->getClient()->sendRequests($requests);
     }
 
     /**
@@ -891,12 +909,76 @@ class Dropbox
         return $this->finishUploadSession($dropboxFile, $sessionId, $uploaded, $remaining, $path, $params);
     }
 
+	/**
+	 * Upload multiple files in a single batch of sessions
+	 *
+	 * @param  DropboxFile[]|string[] $dropboxFiles An associaive array of DropboxFile objects or paths to files, with destination paths as keys
+	 * @param  int                $chunkSize   The amount of data to upload in each chunk
+	 * @param  array              $params      Additional Params
+	 *
+	 * @link https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-start
+	 * @link https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-append_v2
+	 * @link https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-finish_batch
+	 *
+	 * @return string The async_job_id returned from the Dropbox API, which can be used to obtain the status of the asynchronous job. Returns null if there was a problem.
+	 */
+	public function uploadFiles($dropboxFiles, $chunkSize = null, array $params = array())
+	{
+		//No chunk size specified, use default size
+		if (is_null($chunkSize)) {
+			$chunkSize = static::DEFAULT_CHUNK_SIZE;
+		}
+
+		$sessions = [];
+
+		foreach($dropboxFiles as $path=>$dropboxFile)
+		{
+			//Make Dropbox File
+			$dropboxFile = $this->makeDropboxFile($dropboxFile);
+
+			$fileSize = $dropboxFile->getSize();
+
+			$session = [
+				'requests'=>[],
+				'path'=>$path,
+				'offset'=>$fileSize
+			];
+
+			//Start the Upload Session with the file path
+			//since the DropboxFile object will be created
+			//again using the new chunk size.
+			$session['requests'][] = $this->startUploadSession($dropboxFile, $chunkSize, ($fileSize <= $chunkSize), true);
+
+			//Uploaded
+			$uploaded = $chunkSize;
+
+			//Remaining
+			$remaining = $fileSize - $chunkSize;
+
+			//While there is data remaining, append
+			//the chunk to the upload session.
+			while ($remaining > 0) {
+				//Append the next chunk to the Upload session
+				$session['requests'][] = $this->appendUploadSession($dropboxFile, $sessionId, $uploaded, $chunkSize, ($remaining <= $chunkSize), true);
+
+				//Update remaining and uploaded
+				$uploaded = $uploaded + $chunkSize;
+				$remaining = $remaining - $chunkSize;
+			}
+
+			$sessions[] = $session;
+		}
+
+		return $this->finishUploadSessionBatch($sessions, $params);
+	}
+
     /**
      * Start an Upload Session
      *
      * @param  string|DropboxFile $dropboxFile DropboxFile object or Path to file
      * @param  int                $chunkSize   Size of file chunk to upload
      * @param  boolean            $close       Closes the session for "appendUploadSession"
+     * @param  boolean            $async       If true, a request is returned (to be sent later in bulk)
      *
      * @return string Unique identifier for the upload session
      *
@@ -905,7 +987,7 @@ class Dropbox
      * @link https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-start
      *
      */
-    public function startUploadSession($dropboxFile, $chunkSize = -1, $close = false)
+    public function startUploadSession($dropboxFile, $chunkSize = -1, $close = false, $async = false)
     {
         //Make Dropbox File with the given chunk size
         $dropboxFile = $this->makeDropboxFile($dropboxFile, $chunkSize);
@@ -916,8 +998,12 @@ class Dropbox
             'file' => $dropboxFile
         ];
 
-        //Upload File
-        $file = $this->postToContent('/files/upload_session/start', $params);
+        //Upload File or get async request...
+        $file = $this->postToContent('/files/upload_session/start', $params, null, null, $async);
+
+        if ($async)
+        	return $file;
+
         $body = $file->getDecodedBody();
 
         //Cannot retrieve Session ID
@@ -936,12 +1022,13 @@ class Dropbox
      * @param  array       $params       Request Query Params
      * @param  string      $accessToken  Access Token to send with the Request
      * @param  DropboxFile $responseFile Save response to the file
+	 * @param  boolean            $async       If true, a request is returned (to be sent later in bulk)
      *
      * @return \Kunnu\Dropbox\DropboxResponse
      */
-    public function postToContent($endpoint, array $params = [], $accessToken = null, DropboxFile $responseFile = null)
+    public function postToContent($endpoint, array $params = [], $accessToken = null, DropboxFile $responseFile = null, $async = false)
     {
-        return $this->sendRequest("POST", $endpoint, 'content', $params, $accessToken, $responseFile);
+        return $this->sendRequest("POST", $endpoint, 'content', $params, $accessToken, $responseFile, $async);
     }
 
     /**
@@ -952,6 +1039,7 @@ class Dropbox
      * @param  int                $offset      The amount of data that has been uploaded so far
      * @param  int                $chunkSize   The amount of data to upload
      * @param  boolean            $close       Closes the session for futher "appendUploadSession" calls
+	 * @param  boolean            $async       If true, a request is returned (to be sent later in bulk)
      *
      * @return string Unique identifier for the upload session
      *
@@ -960,7 +1048,7 @@ class Dropbox
      * @link https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-append_v2
      *
      */
-    public function appendUploadSession($dropboxFile, $sessionId, $offset, $chunkSize, $close = false)
+    public function appendUploadSession($dropboxFile, $sessionId, $offset, $chunkSize, $close = false, $async = false)
     {
         //Make Dropbox File
         $dropboxFile = $this->makeDropboxFile($dropboxFile, $chunkSize, $offset);
@@ -987,7 +1075,10 @@ class Dropbox
         $params['validateResponse'] = false;
 
         //Upload File
-        $this->postToContent('/files/upload_session/append_v2', $params);
+        $response = $this->postToContent('/files/upload_session/append_v2', $params, null, null, $async);
+
+        if ($async)
+        	return $response;
 
         //Make and Return the Model
         return $sessionId;
@@ -1039,6 +1130,73 @@ class Dropbox
 
         //Make and Return the Model
         return new FileMetadata($body);
+    }
+
+    /**
+     * Finishes multiple sessions in a single batch and saves the uploaded data
+     *
+     * @param  array              $sessions      An associative array of sessions to complete, each containing an array of requests to send in parallel
+     * @param  array              $params      Additional Params
+     *
+	 * @return string The async_job_id returned from the Dropbox API, which can be used to obtain the status of the asynchronous job. Returns null if there was a problem.
+     *
+     * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
+     *
+     * @link https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-finish_batch
+     *
+     */
+    public function finishUploadSessionBatch($sessions, array $params = [])
+    {
+        $queryParams = [
+        	'entries'=>[],
+		];
+
+        $requests = [];
+        foreach($sessions as $session)
+		{
+			foreach($session['requests'] as $request)
+				$requests[] = $request;
+		}
+
+        //send all requests at once in parallel...
+		$this->sendRequests($requests);
+
+        //get the session IDs and finish the batch...
+        foreach($sessions as $sessionID=>$sessionInfo)
+		{
+			$startRequest = $sessionInfo['requests'][0];
+			$body = $startRequest->getResponse()->getDecodedBody();
+			if ($body && array_key_exists('session_id', $body))
+			{
+				$sessionID = $body['session_id'];
+
+				$commit = $params;
+				$commit['path'] = $sessionInfo['path'];
+
+				$queryParams['entries'][] = [
+					'cursor'=>[
+						'session_id'=>$sessionID,
+						'offset'=>$sessionInfo['offset'],
+					],
+					'commit'=>$commit,
+				];
+			}
+		}
+
+        //Finish batch...
+        $file = $this->postToAPI('/files/upload_session/finish_batch', $queryParams);
+        $body = $file->getDecodedBody();
+
+        if (array_key_exists('async_job_id', $body))
+		{
+//			sleep(5);
+//			$check = $this->postToAPI('/files/upload_session/finish_batch/check', ['async_job_id'=>$body['async_job_id']]);
+//			$checkResponse = $check->getDecodedBody();
+
+        	return $body['async_job_id'];
+		}
+        else
+        	return null;
     }
 
     /**

@@ -61,6 +61,13 @@ class DropboxRequest
     protected $file = null;
 
     /**
+     * The response (set after sending an async batch of requests)
+     *
+     * @var \Kunnu\Dropbox\DropboxResponse
+     */
+    protected $response = null;
+
+    /**
      * Content Type for the Request
      *
      * @var string
@@ -327,6 +334,40 @@ class DropboxRequest
     public function hasFile()
     {
         return !is_null($this->file) ? true : false;
+    }
+
+    /**
+     * Get the Response after sending this request in an async batch
+     *
+     * @return \Kunnu\Dropbox\DropboxResponse
+     */
+    public function getResponse()
+    {
+        return $this->response;
+    }
+
+    /**
+     * Set the Response after sending this request in an async batch
+     *
+     * @param \Kunnu\Dropbox\DropboxResponse
+     *
+     * @return \Kunnu\Dropbox\DropboxRequest
+     */
+    public function setResponse(DropboxResponse $response)
+    {
+        $this->response = $response;
+
+        return $this;
+    }
+
+    /**
+     * Returns true if this Request was sent in an async batch and now has a response
+     *
+     * @return boolean
+     */
+    public function hasResponse()
+    {
+        return !is_null($this->response) ? true : false;
     }
 
     /**

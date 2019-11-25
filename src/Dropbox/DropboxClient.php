@@ -173,6 +173,59 @@ class DropboxClient
     }
 
     /**
+     * Send multiple requests to the Server and return the Response
+     *
+     * @param  DropboxRequest[] $requests
+     * @param  DropboxResponse $response
+     *
+     * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
+     */
+    public function sendRequests(&$requests)
+    {
+    	$requestsArray = [];
+    	foreach($requests as $id=>$request)
+		{
+			//Prepare Request
+			list($url, $headers, $requestBody) = $this->prepareRequest($request);
+
+			$options = [];
+//			if ($response instanceof DropboxResponseToFile) {
+//				$options['sink'] = $response->getFilePath();
+//			}
+
+			$newRequest = [
+				'method'=>$request->getMethod(),
+				'url'=>$url,
+				'headers'=>$headers,
+				'body'=>$requestBody,
+				'options'=>$options,
+			];
+
+			$requestsArray[$id] = $newRequest;
+		}
+
+        //Send the Request to the Server through the HTTP Client
+        //and fetch the raw response as DropboxRawResponse
+        $this->getHttpClient()->send_multiple($requestsArray);
+
+    	foreach($requests as $id=>$request)
+		{
+			if (array_key_exists($id, $requestsArray) && array_key_exists('response', $requestsArray[$id]))
+			{
+				$rawResponse = $requestsArray[$id]['response'];
+				$response = new DropboxResponse($request);
+				$response->setHttpStatusCode($rawResponse->getHttpResponseCode());
+				$response->setHeaders($rawResponse->getHeaders());
+				if (!$response instanceof DropboxResponseToFile) {
+					$response->setBody($rawResponse->getBody());
+				}
+
+				$request->setResponse($response);
+			}
+		}
+    }
+
+    /**
      * Prepare a Request before being sent to the HTTP Client
      *
      * @param  \Kunnu\Dropbox\DropboxRequest $request

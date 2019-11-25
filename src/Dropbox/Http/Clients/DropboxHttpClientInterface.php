@@ -20,4 +20,15 @@ interface DropboxHttpClientInterface
      * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
      */
     public function send($url, $method, $body, $headers = [], $options = []);
+
+	/**
+	 * Send multiple requests to the server, ideally in parallel, and fetch the raw response.
+	 *
+	 * @param  array $requests     An array of requests to send.
+	 *
+	 * @return \Kunnu\Dropbox\Http\DropboxRawResponse Raw response from the server
+	 *
+	 * @throws \Kunnu\Dropbox\Exceptions\DropboxClientException
+	 */
+	public function send_multiple(&$requests);
 }
